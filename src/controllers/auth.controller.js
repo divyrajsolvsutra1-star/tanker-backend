@@ -6,12 +6,6 @@ import {
   setSessionCookie,
 } from "../middleware/auth.js";
 import {
-  createMfaSetup,
-  decryptMfaSecret,
-  encryptMfaSecret,
-  verifyMfaCode,
-} from "../utils/mfa.js";
-import {
   createOpaqueToken,
   hashPassword,
   hashToken,
@@ -48,19 +42,16 @@ async function createSession(user, res) {
 
 export async function login(req, res, next) {
   try {
-    const { email, password, code } = req.body ?? {};
+    const { email, password } = req.body ?? {};
     if (
       typeof email !== "string" ||
-      typeof password !== "string" ||
-      typeof code !== "string"
+      typeof password !== "string"
     ) {
-      throw httpError(400, "Email, password, and authenticator code are required.");
+      throw httpError(400, "Email and password are required.");
     }
 
     const normalizedEmail = email.trim().toLowerCase();
-    const user = await User.findOne({ email: normalizedEmail })
-      .select("+passwordHash +mfaSecretEncrypted")
-      .exec();
+    const user = await User.findOne({ email: normalizedEmail }).select("+passwordHash").exec();
 
     if (
       !user ||
@@ -68,13 +59,6 @@ export async function login(req, res, next) {
       !(await verifyPassword(password, user.passwordHash))
     ) {
       throw httpError(401, "Email or password is incorrect.");
-    }
-
-    if (
-      !user.mfaSecretEncrypted ||
-      !verifyMfaCode(decryptMfaSecret(user.mfaSecretEncrypted), code)
-    ) {
-      throw httpError(401, "Authenticator code is invalid.");
     }
 
     return res.json(await createSession(user, res));
@@ -101,68 +85,19 @@ export async function acceptInvitation(req, res, next) {
       invitationTokenHash: hashToken(token),
       invitationExpiresAt: { $gt: new Date() },
       status: "invited",
-    }).select(
-      "+invitationTokenHash +invitationExpiresAt +passwordHash +pendingMfaSecretEncrypted",
-    );
+    }).select("+invitationTokenHash +invitationExpiresAt +passwordHash");
 
     if (!user) {
       throw httpError(400, "Invitation is invalid or has expired.");
     }
 
-    const setup = createMfaSetup(user.email);
-    const setupToken = createOpaqueToken();
-    const now = new Date();
-
     user.passwordHash = await hashPassword(password);
-    user.pendingMfaSecretEncrypted = encryptMfaSecret(setup.secret);
-    user.mfaSetupTokenHash = hashToken(setupToken);
-    user.mfaSetupExpiresAt = new Date(now.getTime() + 10 * 60 * 1000);
     user.invitationTokenHash = undefined;
     user.invitationExpiresAt = undefined;
-    await user.save();
-
-    return res.status(200).json({
-      setupToken,
-      otpauthUrl: setup.uri,
-      manualSecret: setup.secret,
-    });
-  } catch (error) {
-    return next(error);
-  }
-}
-
-export async function confirmMfaEnrollment(req, res, next) {
-  try {
-    const { setupToken, code } = req.body ?? {};
-    if (
-      typeof setupToken !== "string" ||
-      typeof code !== "string" ||
-      !/^\d{6}$/.test(code)
-    ) {
-      throw httpError(400, "A setup token and six-digit authenticator code are required.");
-    }
-
-    const user = await User.findOne({
-      mfaSetupTokenHash: hashToken(setupToken),
-      mfaSetupExpiresAt: { $gt: new Date() },
-      status: "invited",
-    }).select(
-      "+mfaSetupTokenHash +mfaSetupExpiresAt +pendingMfaSecretEncrypted +mfaSecretEncrypted",
-    );
-
-    if (!user || !user.pendingMfaSecretEncrypted) {
-      throw httpError(400, "MFA setup is invalid or has expired.");
-    }
-
-    const secret = decryptMfaSecret(user.pendingMfaSecretEncrypted);
-    if (!verifyMfaCode(secret, code)) {
-      throw httpError(400, "Authenticator code is invalid.");
-    }
-
-    user.mfaSecretEncrypted = user.pendingMfaSecretEncrypted;
     user.pendingMfaSecretEncrypted = undefined;
     user.mfaSetupTokenHash = undefined;
     user.mfaSetupExpiresAt = undefined;
+    user.mfaSecretEncrypted = undefined;
     user.status = "active";
     await user.save();
 

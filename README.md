@@ -1,7 +1,7 @@
 # Tanker backend
 
 The backend is an Express API using MongoDB. Authentication is invitation-only;
-all users enroll TOTP authenticator MFA, and browser sessions expire after
+users activate their account with a password, and browser sessions expire after
 eight hours.
 
 ## Local setup
@@ -11,22 +11,51 @@ MongoDB Atlas connection string.
 
 For Windows, install MongoDB Community Server from the
 [official MongoDB download page](https://www.mongodb.com/try/download/community)
-and run it as a local service.
+and install it as a Windows service. Start it from an elevated PowerShell:
+
+```powershell
+Start-Service MongoDB
+Get-Service MongoDB
+```
+
+The backend health check must report `"database":{"status":"connected"}` before
+sign-in or setup scripts can work. The default local connection is
+`mongodb://127.0.0.1:27017/tanker_wash`.
 
 ```powershell
 Copy-Item .env.example .env
-$key = node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('hex'))"
-(Get-Content .env) -replace '^MFA_ENCRYPTION_KEY=.*$', "MFA_ENCRYPTION_KEY=$key" | Set-Content -Encoding utf8 .env
 npm install
 npm run dev
 ```
 
-Keep the generated `MFA_ENCRYPTION_KEY` private and backed up securely. It
-encrypts authenticator secrets stored in MongoDB; losing it prevents those
-secrets from being decrypted.
-
 The API listens at `http://localhost:5000`. From the workspace root,
 `npm run dev` starts both the backend and frontend together.
+
+For local development, create demo logins in a second backend terminal after
+MongoDB is running:
+
+```powershell
+npm run create-users
+```
+
+This seed command is disabled when `NODE_ENV=production`. It creates these
+password-only demo logins, skips any existing accounts without changing them,
+and refuses remote MongoDB hosts unless explicitly enabled. For a confirmed
+non-production Atlas database only, run:
+
+```powershell
+$env:ALLOW_REMOTE_DEMO_SEED = "true"
+npm run create-users
+Remove-Item Env:\ALLOW_REMOTE_DEMO_SEED
+```
+
+Never enable remote demo seeding for production. For a remote production
+database, use the invitation-only `create-owner` workflow above.
+
+- `admin@tanker.local` / `Admin@123456`
+- `manager@tanker.local` / `Manager@123456`
+- `operator@tanker.local` / `Operator@123456`
+- `accountant@tanker.local` / `Accountant@123456`
 
 ## Create the first Owner/Admin
 
@@ -37,8 +66,8 @@ npm run create-owner -- owner@example.com "Owner Name"
 ```
 
 Open the one-time activation link printed by the command. It expires after 24
-hours. Choose a password of at least 12 characters and enroll an authenticator
-app by scanning the QR code. There is no public registration endpoint.
+hours. Choose a password of at least 12 characters. There is no public
+registration endpoint.
 
 Owner/Admin users can invite staff from `/users`. The generated activation link
 must be shared securely with that person; email delivery is not configured.
@@ -48,15 +77,14 @@ Roles and per-module/action permissions are managed by Owner/Admin.
 
 - Passwords use Node.js `scrypt`; session tokens are random, stored hashed, and
   held in `HttpOnly`, `SameSite=Lax` cookies.
-- TOTP secrets are encrypted with AES-256-GCM using `MFA_ENCRYPTION_KEY`.
-- Login and MFA enrollment attempts are rate limited.
+- Login and invitation activation attempts are rate limited.
 - Mutating browser requests must match the configured `CORS_ORIGIN`.
 - Users cannot self-register. Disabled users cannot start authenticated sessions.
 
 ## API and scripts
 
 - `GET /api/health` — API and MongoDB readiness
-- `/api/auth` — login, invitation activation, MFA enrollment, current user, logout
+- `/api/auth` — password login, invitation activation, current user, logout
 - `/api/users` — Owner/Admin user listing and invitations
 - `/api/roles` — Owner/Admin role permission configuration
 - `npm run dev` — start with Node watch mode
