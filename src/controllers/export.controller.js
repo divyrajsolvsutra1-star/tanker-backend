@@ -37,12 +37,11 @@ export async function exportReport(req, res, next) {
       } else if (reportName.includes("balance-sheet")) {
         htmlContent = generateHTML_BalanceSheet(data);
       } else {
-        // Generic table HTML
         const title = req.body.title || reportName;
         htmlContent = generateHTMLTable(title, Array.isArray(data) ? data : [data]);
       }
 
-      content = htmlContent;
+      content = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${reportName}</title></head><body>${htmlContent}${format === "print" ? "<script>window.onload=()=>window.print();</script>" : ""}</body></html>`;
       contentType = "text/html; charset=utf-8";
       filename = `${reportName}.html`;
     }
@@ -66,24 +65,28 @@ export async function listExportFormats(req, res, next) {
         {
           name: "JSON",
           value: "json",
+          format: "json",
           description: "JSON format for data import/export",
           extension: ".json"
         },
         {
           name: "CSV",
           value: "csv",
+          format: "csv",
           description: "Comma-separated values, compatible with Excel",
           extension: ".csv"
         },
         {
           name: "HTML",
           value: "html",
+          format: "html",
           description: "HTML format for download and email",
           extension: ".html"
         },
         {
           name: "Print",
           value: "print",
+          format: "print",
           description: "Print-friendly HTML format",
           extension: ".html"
         }

@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { env } from "./env.js";
+import { initializeDefaults } from "./seed-defaults.js";
 
 export async function connectDatabase() {
   mongoose.set("strictQuery", true);
@@ -7,6 +8,7 @@ export async function connectDatabase() {
     serverSelectionTimeoutMS: env.mongoServerSelectionTimeoutMs,
   });
   console.log("MongoDB connected.");
+  await initializeDefaults();
 }
 
 export async function disconnectDatabase() {

@@ -115,10 +115,22 @@ export async function getBalanceSheet(req, res, next) {
     const assets = Object.values(balances).filter(b => b.type === "asset");
     const liabilities = Object.values(balances).filter(b => b.type === "liability");
     const equity = Object.values(balances).filter(b => b.type === "equity");
+    const incomes = Object.values(balances).filter(b => b.type === "income");
+    const expenses = Object.values(balances).filter(b => b.type === "expense");
 
     const totalAssets = assets.reduce((sum, acc) => sum + acc.balance, 0);
     const totalLiabilities = liabilities.reduce((sum, acc) => sum + acc.balance, 0);
-    const totalEquity = equity.reduce((sum, acc) => sum + acc.balance, 0);
+    const totalContributedEquity = equity.reduce((sum, acc) => sum + acc.balance, 0);
+    const totalIncome = incomes.reduce((sum, acc) => sum + acc.balance, 0);
+    const totalExpense = expenses.reduce((sum, acc) => sum + acc.balance, 0);
+    const netProfit = totalIncome - totalExpense;
+
+    const totalEquity = totalContributedEquity + netProfit;
+
+    const equityLines = equity.map(acc => ({ code: acc.code, name: acc.name, amount: acc.balance }));
+    if (netProfit !== 0) {
+      equityLines.push({ code: "RE-01", name: "Current Period Earnings / (Loss)", amount: netProfit });
+    }
 
     res.json({
       report: "Balance Sheet",
@@ -127,8 +139,9 @@ export async function getBalanceSheet(req, res, next) {
       totalAssets,
       liabilities: liabilities.map(acc => ({ code: acc.code, name: acc.name, amount: acc.balance })),
       totalLiabilities,
-      equity: equity.map(acc => ({ code: acc.code, name: acc.name, amount: acc.balance })),
+      equity: equityLines,
       totalEquity,
+      currentPeriodProfit: netProfit,
       balanced: Math.abs(totalAssets - (totalLiabilities + totalEquity)) < 0.01
     });
   } catch (error) { next(error); }
@@ -283,7 +296,6 @@ export async function getBankBook(req, res, next) {
   try {
     const fromDate = req.query.from ? new Date(`${req.query.from}T00:00:00.000Z`) : null;
     const toDate = req.query.to ? new Date(`${req.query.to}T23:59:59.999Z`) : null;
-    const bankAccountId = req.query.bankAccountId;
 
     const bankAccount = await Account.findOne({ code: "1201" });
     if (!bankAccount) throw httpError(404, "Bank account not found");

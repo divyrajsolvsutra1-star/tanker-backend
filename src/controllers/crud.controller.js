@@ -35,7 +35,7 @@ export function createCrudController(Model, searchFields = []) {
           filter.$or = searchFields.map((field) => ({ [field]: { $regex: escaped, $options: "i" } }));
         }
         const [items, total] = await Promise.all([
-          Model.find(filter).populate("customerId vehicleId washTypeId employeeIds accountId bankAccountId").sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+          Model.find(filter).populate(["customerId", "vehicleId", "washTypeId", "employeeIds", "accountId", "bankAccountId", "fromAccountId", "toAccountId"].filter((p) => Model.schema?.paths?.[p]).join(" ")).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
           Model.countDocuments(filter)
         ]);
         res.json({ items, pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
@@ -43,7 +43,7 @@ export function createCrudController(Model, searchFields = []) {
     },
     async get(req, res, next) {
       try {
-        const item = await Model.findById(req.params.id).populate("customerId vehicleId washTypeId employeeIds accountId bankAccountId").lean();
+        const item = await Model.findById(req.params.id).populate(["customerId", "vehicleId", "washTypeId", "employeeIds", "accountId", "bankAccountId", "fromAccountId", "toAccountId"].filter((p) => Model.schema?.paths?.[p]).join(" ")).lean();
         if (!item) throw httpError(404, `${Model.modelName} not found.`);
         res.json({ item });
       } catch (error) { next(error); }
