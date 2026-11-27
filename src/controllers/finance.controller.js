@@ -58,7 +58,7 @@ export async function createCustomerPayment(req,res,next) {
     let allocated=0;
     for(const allocation of allocations){
       const entry=await WashEntry.findOne({_id:allocation.washEntryId,customerId:customer._id});
-      if(!entry) throw httpError(400,"Allocation wash entry is invalid.");
+      if(!entry||entry.status==="cancelled") throw httpError(400,"Allocation wash entry is invalid.");
       const amount=Number(allocation.amount||0);
       if(amount<=0) throw httpError(400,"Allocation amounts must be positive.");
       allocated+=amount;

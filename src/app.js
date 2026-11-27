@@ -10,7 +10,18 @@ import apiRouter from "./routes/index.js";
 const app = express();
 
 app.use(helmet());
-app.use(cors({ origin: env.corsOrigin, credentials: true }));
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin || env.corsOrigins.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+      callback(null, false);
+    },
+    credentials: true,
+  }),
+);
 app.use(express.json({ limit: "1mb" }));
 app.use("/api", requireSameOrigin);
 app.use("/api", apiRouter);

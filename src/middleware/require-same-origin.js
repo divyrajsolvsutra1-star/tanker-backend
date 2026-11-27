@@ -7,7 +7,7 @@ export function requireSameOrigin(req, res, next) {
     return next();
   }
 
-  if (req.get("origin") !== env.corsOrigin) {
+  if (!env.corsOrigins.includes(req.get("origin"))) {
     return res.status(403).json({ error: "Request origin is not allowed." });
   }
 

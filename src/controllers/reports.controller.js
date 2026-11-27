@@ -426,8 +426,7 @@ export async function getWashTypeWiseReport(req, res, next) {
     const toDate = req.query.to ? new Date(`${req.query.to}T23:59:59.999Z`) : new Date();
 
     const entries = await WashEntry.find({
-      entryDate: { $gte: fromDate, $lte: toDate },
-      status: { $ne: "cancelled" }
+      entryDate: { $gte: fromDate, $lte: toDate }
     }).populate("washTypeId").lean();
 
     const byWashType = {};
@@ -474,8 +473,7 @@ export async function getCustomerWiseReport(req, res, next) {
     const toDate = req.query.to ? new Date(`${req.query.to}T23:59:59.999Z`) : new Date();
 
     const entries = await WashEntry.find({
-      entryDate: { $gte: fromDate, $lte: toDate },
-      status: { $ne: "cancelled" }
+      entryDate: { $gte: fromDate, $lte: toDate }
     }).populate("customerId").lean();
 
     const byCustomer = {};

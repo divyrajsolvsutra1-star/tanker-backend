@@ -23,6 +23,7 @@ export const PERMISSION_ACTIONS = [
   "read",
   "create",
   "update",
+  "delete",
   "deactivate",
   "approve",
   "export",
@@ -32,9 +33,13 @@ const rolePermissionSchema = new mongoose.Schema(
   {
     role: {
       type: String,
-      enum: ["manager", "entry_operator", "accountant", "washer"],
       required: true,
       unique: true,
+    },
+    name: {
+      type: String,
+      trim: true,
+      maxlength: 60,
     },
     permissions: {
       type: Map,

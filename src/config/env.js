@@ -8,7 +8,10 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) {
 
 export const env = Object.freeze({
   port,
-  corsOrigin: process.env.CORS_ORIGIN ?? "http://localhost:3000",
+  corsOrigins: (process.env.CORS_ORIGIN ?? "http://localhost:3000")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean),
   mongoUri:
     process.env.MONGODB_URI ?? "mongodb://127.0.0.1:27017/tanker_wash",
   mongoServerSelectionTimeoutMs: 5000,

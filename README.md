@@ -90,4 +90,7 @@ Roles and per-module/action permissions are managed by Owner/Admin.
 - `npm run dev` — start with Node watch mode
 - `npm start` — start the API
 - `npm run create-owner -- <email> "<display name>"` — bootstrap the first Owner/Admin
-- `npm test` — run backend unit tests
+- `npm test` — run backend integration tests against local MongoDB at
+  `mongodb://127.0.0.1:27017/tanker_wash_test` by default. Override with
+  `TEST_MONGODB_URI` only for a local database whose name ends in `_test`;
+  the test database is cleared before each run.

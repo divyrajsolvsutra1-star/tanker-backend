@@ -50,7 +50,7 @@ export async function requireAuth(req, res, next) {
     const session = await AuthSession.findOne({
       tokenHash: hashToken(token),
       expiresAt: { $gt: new Date() },
-    }).populate("userId", "displayName email role status");
+    }).populate("userId", "displayName email role status mustChangePassword");
 
     if (!session || !session.userId || session.userId.status !== "active") {
       clearSessionCookie(res);
@@ -59,6 +59,19 @@ export async function requireAuth(req, res, next) {
 
     req.auth = session.userId;
     req.authSessionId = session._id;
+    if (
+      req.auth.mustChangePassword &&
+      !(
+        (req.method === "GET" && req.originalUrl.endsWith("/auth/me")) ||
+        (req.method === "POST" && req.originalUrl.endsWith("/auth/logout")) ||
+        (req.method === "PUT" && req.originalUrl.endsWith("/auth/password"))
+      )
+    ) {
+      return res.status(403).json({
+        error: "Change your temporary password before continuing.",
+        code: "PASSWORD_CHANGE_REQUIRED",
+      });
+    }
     return next();
   } catch (error) {
     return next(error);

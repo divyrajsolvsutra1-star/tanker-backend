@@ -30,7 +30,7 @@ export async function getDashboard(_req, res, next) {
     const openingOutstanding = customers.reduce((sum,c) => sum + Number(c.openingBalance || 0), 0);
     const [washAmount, allocatedAmount, paymentAdvances] = await Promise.all([
       WashEntry.aggregate([
-        { $match:{ customerId:{ $in:customers.map((customer)=>customer._id) }, paymentType:"credit", status:{ $ne:"cancelled" } } },
+        { $match:{ customerId:{ $in:customers.map((customer)=>customer._id) }, paymentType:"credit" } },
         { $group:{ _id:null,total:{ $sum:"$savedRate" } } }
       ]),
       LedgerPayment.aggregate([

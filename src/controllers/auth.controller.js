@@ -23,6 +23,7 @@ function publicUser(user) {
     displayName: user.displayName,
     email: user.email,
     role: user.role,
+    mustChangePassword: Boolean(user.mustChangePassword),
   };
 }
 
@@ -98,10 +99,46 @@ export async function acceptInvitation(req, res, next) {
     user.mfaSetupTokenHash = undefined;
     user.mfaSetupExpiresAt = undefined;
     user.mfaSecretEncrypted = undefined;
+    user.mustChangePassword = false;
     user.status = "active";
     await user.save();
 
     return res.status(201).json(await createSession(user, res));
+  } catch (error) {
+    return next(error);
+  }
+}
+
+export async function changeOwnPassword(req, res, next) {
+  try {
+    const { currentPassword, newPassword } = req.body ?? {};
+    if (
+      typeof currentPassword !== "string" ||
+      !validatePassword(newPassword)
+    ) {
+      throw httpError(400, "Current and valid new passwords are required.");
+    }
+
+    const user = await User.findById(req.auth?._id).select("+passwordHash");
+    if (!user || !user.mustChangePassword) {
+      throw httpError(409, "A required password change is not pending.");
+    }
+    if (!(await verifyPassword(currentPassword, user.passwordHash))) {
+      throw httpError(400, "Current password is incorrect.");
+    }
+    if (currentPassword === newPassword) {
+      throw httpError(400, "Choose a new password different from the temporary password.");
+    }
+
+    user.passwordHash = await hashPassword(newPassword);
+    user.mustChangePassword = false;
+    await user.save();
+    await AuthSession.deleteMany({
+      userId: user._id,
+      _id: { $ne: req.authSessionId },
+    });
+
+    return res.json({ user: publicUser(user) });
   } catch (error) {
     return next(error);
   }

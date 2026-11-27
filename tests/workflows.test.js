@@ -309,8 +309,8 @@ test("Module: User & Permissions", async (t) => {
   });
 
   await t.test("should validate permission actions", () => {
-    const actions = ["read", "create", "update", "deactivate"];
-    assert.equal(actions.length, 4);
+    const actions = ["read", "create", "update", "delete", "deactivate"];
+    assert.equal(actions.length, 5);
   });
 });
 

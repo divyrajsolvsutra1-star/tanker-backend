@@ -5,7 +5,7 @@ function httpError(status, message) {
   return Object.assign(new Error(message), { status });
 }
 
-export function createCrudController(Model, searchFields = []) {
+export function createCrudController(Model, searchFields = [], references = []) {
   async function log(req, action, entityId, changes) {
     await AuditLog.create({
       userId: req.auth?._id,
@@ -71,11 +71,28 @@ export function createCrudController(Model, searchFields = []) {
       try {
         const item = await Model.findById(req.params.id);
         if (!item) throw httpError(404, `${Model.modelName} not found.`);
-        item.status = "inactive";
-        if (Object.prototype.hasOwnProperty.call(item.toObject(), "active")) item.active = false;
-        await item.save();
-        await log(req, "deactivate", item._id, item.toObject());
-        res.json({ item });
+
+        const linkedRecords = await Promise.all(
+          references.map(async ({ model, field, label }) => {
+            const count = await model.countDocuments({ [field]: item._id });
+            return count > 0 ? `${label} (${count})` : null;
+          }),
+        );
+        const blockingReferences = linkedRecords.filter(Boolean);
+        if (blockingReferences.length > 0) {
+          throw httpError(
+            409,
+            `Cannot delete this ${Model.modelName}; it is referenced by ${blockingReferences.join(", ")}. Remove those records first.`,
+          );
+        }
+
+        const deleted = await Model.deleteOne({ _id: item._id });
+        if (deleted.deletedCount !== 1) {
+          throw httpError(404, `${Model.modelName} not found.`);
+        }
+
+        await log(req, "delete", item._id, item.toObject());
+        res.status(204).end();
       } catch (error) { next(error); }
     }
   };

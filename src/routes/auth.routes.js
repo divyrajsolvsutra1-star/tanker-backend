@@ -2,6 +2,7 @@ import { rateLimit } from "express-rate-limit";
 import { Router } from "express";
 import {
   acceptInvitation,
+  changeOwnPassword,
   getCurrentUser,
   login,
   logout,
@@ -21,6 +22,7 @@ authRouter.use(requireDatabase);
 authRouter.post("/login", loginLimiter, login);
 authRouter.post("/invitations/accept", loginLimiter, acceptInvitation);
 authRouter.get("/me", requireAuth, getCurrentUser);
+authRouter.put("/password", requireAuth, changeOwnPassword);
 authRouter.post("/logout", requireAuth, logout);
 
 export default authRouter;

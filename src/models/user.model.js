@@ -1,13 +1,5 @@
 import mongoose from "mongoose";
 
-export const USER_ROLES = [
-  "owner_admin",
-  "manager",
-  "entry_operator",
-  "accountant",
-  "washer",
-];
-
 const userSchema = new mongoose.Schema(
   {
     displayName: {
@@ -26,14 +18,18 @@ const userSchema = new mongoose.Schema(
     },
     role: {
       type: String,
-      enum: USER_ROLES,
       required: true,
+      trim: true,
     },
     status: {
       type: String,
       enum: ["invited", "active", "disabled"],
       default: "invited",
       required: true,
+    },
+    mustChangePassword: {
+      type: Boolean,
+      default: false,
     },
     passwordHash: {
       type: String,

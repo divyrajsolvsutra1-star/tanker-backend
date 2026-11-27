@@ -15,7 +15,24 @@ let managerCookie;
 let operatorCookie;
 let accountantCookie;
 
+const TEST_MONGODB_URI =
+  process.env.TEST_MONGODB_URI ??
+  "mongodb://127.0.0.1:27017/tanker_wash_test";
 const ORIGIN_HEADER = { Origin: env.corsOrigin || "http://localhost:3000" };
+
+function assertSafeTestDatabase(uri) {
+  const parsed = new URL(uri);
+  const hostname = parsed.hostname.replace(/^\[|\]$/g, "");
+  const databaseName = decodeURIComponent(parsed.pathname.slice(1).split("/")[0]);
+  if (
+    !["localhost", "127.0.0.1", "::1"].includes(hostname) ||
+    !databaseName.endsWith("_test")
+  ) {
+    throw new Error(
+      "Integration tests require a local MongoDB database ending in _test. Set TEST_MONGODB_URI.",
+    );
+  }
+}
 
 async function api(path, { method = "GET", body, cookie } = {}) {
   const headers = { ...ORIGIN_HEADER, "Content-Type": "application/json" };
@@ -32,7 +49,9 @@ async function api(path, { method = "GET", body, cookie } = {}) {
 }
 
 before(async () => {
-  await mongoose.connect(env.mongoUri, { serverSelectionTimeoutMS: 5000 });
+  assertSafeTestDatabase(TEST_MONGODB_URI);
+  await mongoose.connect(TEST_MONGODB_URI, { serverSelectionTimeoutMS: 5000 });
+  await mongoose.connection.dropDatabase();
   await new Promise((resolve) => {
     server = http.createServer(app);
     server.listen(0, "127.0.0.1", () => {
@@ -493,6 +512,42 @@ test("Tanker Wash Management System - Full Proposal Verification", async (t) => 
     assert.equal(empRow.advances, 2000);
     assert.equal(empRow.paid, 10000);
     assert.equal(empRow.remaining, 5000); // 15000 - 10000 = 5000
+  });
+
+  await t.test("4.10.1 Hard delete removes unused records and protects linked records", async () => {
+    const blockedDelete = await api(`/bank-accounts/${bankAccountHdfc._id}`, {
+      method: "DELETE",
+      cookie: adminCookie,
+    });
+    assert.equal(blockedDelete.status, 409);
+    assert.match(blockedDelete.data.error, /referenced by/);
+
+    const stillExists = await api(`/bank-accounts/${bankAccountHdfc._id}`, {
+      cookie: adminCookie,
+    });
+    assert.equal(stillExists.status, 200);
+
+    const disposableAccount = await api("/bank-accounts", {
+      method: "POST",
+      cookie: adminCookie,
+      body: {
+        bankName: "Temporary Test Bank",
+        accountName: "Disposable Account",
+        accountNumber: "DELETE-TEST",
+      },
+    });
+    assert.equal(disposableAccount.status, 201);
+
+    const deleted = await api(`/bank-accounts/${disposableAccount.data.item._id}`, {
+      method: "DELETE",
+      cookie: adminCookie,
+    });
+    assert.equal(deleted.status, 204);
+
+    const noLongerExists = await api(`/bank-accounts/${disposableAccount.data.item._id}`, {
+      cookie: adminCookie,
+    });
+    assert.equal(noLongerExists.status, 404);
   });
 
   await t.test("4.11 Double-Entry Accounting & Financial Statements", async () => {

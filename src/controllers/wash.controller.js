@@ -3,12 +3,39 @@ import { Customer } from "../models/customer.model.js";
 import { Vehicle } from "../models/vehicle.model.js";
 import { WashType } from "../models/wash-type.model.js";
 import { WashEntry } from "../models/wash-entry.model.js";
+import { LedgerPayment } from "../models/ledger-payment.model.js";
 import { AuditLog } from "../models/audit-log.model.js";
 import { Account, Journal } from "../models/accounting.model.js";
 import { CashBankTransaction } from "../models/cash-bank-transaction.model.js";
 import { ensureDefaultAccounts } from "../config/seed-defaults.js";
 
 function httpError(status, message) { return Object.assign(new Error(message), { status }); }
+
+export function planPaymentAdjustmentAfterWashEntryDelete(payment, washEntryId) {
+  const removedAmount = payment.allocations
+    .filter((allocation) => String(allocation.washEntryId) === String(washEntryId))
+    .reduce((sum, allocation) => sum + allocation.amount, 0);
+  const remainingAllocations = payment.allocations.filter(
+    (allocation) => String(allocation.washEntryId) !== String(washEntryId),
+  );
+  const remainingAmount = Number((payment.amount - removedAmount).toFixed(2));
+  const remainingAllocated = remainingAllocations.reduce(
+    (sum, allocation) => sum + allocation.amount,
+    0,
+  );
+
+  if (
+    remainingAmount < 0 ||
+    Math.abs(remainingAmount - remainingAllocated - Number(payment.unallocatedAmount || 0)) > 0.01
+  ) {
+    throw httpError(409, `Receipt ${payment.receiptNumber} has inconsistent allocations.`);
+  }
+
+  return {
+    remainingAllocations,
+    remainingAmount,
+  };
+}
 
 async function nextEntryNumber() {
   const count = await WashEntry.countDocuments();
@@ -141,15 +168,101 @@ export async function createWashEntry(req, res, next) {
 
 export async function updateWashStatus(req, res, next) {
   try {
-    const allowed = ["booked","washing","completed","delivered","cancelled"];
+    const allowed = ["booked","washing","completed","delivered"];
     const status = req.body?.status;
     if (!allowed.includes(status)) throw httpError(400, "Invalid wash status.");
     const item = await WashEntry.findById(req.params.id);
     if (!item) throw httpError(404, "Wash entry not found.");
+    if (item.status === "cancelled") {
+      throw httpError(409, "Cancelled wash entries cannot be updated.");
+    }
     item.status = status;
     item.statusHistory.push({ status, changedBy:req.auth?._id, changedAt:new Date(), note:req.body?.note });
     await item.save();
     await AuditLog.create({ userId:req.auth?._id, action:"status_update", entityType:"WashEntry", entityId:item._id, changes:{status,note:req.body?.note}, ipAddress:req.ip });
     res.json({ item });
   } catch (error) { next(error); }
+}
+
+export async function deleteWashEntry(req, res, next) {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      throw httpError(400, "Wash entry ID is invalid.");
+    }
+
+    const item = await WashEntry.findById(req.params.id);
+    if (!item) throw httpError(404, "Wash entry not found.");
+
+    const linkedPayments = await LedgerPayment.find({
+      "allocations.washEntryId": item._id,
+    });
+    const paymentUpdates = linkedPayments.map((payment) => ({
+      payment,
+      ...planPaymentAdjustmentAfterWashEntryDelete(payment, item._id),
+    }));
+
+    const paymentIds = linkedPayments.map((payment) => payment._id);
+    const [washJournals, washTransactions, paymentJournals, paymentTransactions] = await Promise.all([
+      Journal.find({ referenceType: "WashEntry", referenceId: item._id }),
+      CashBankTransaction.find({ referenceType: "WashEntry", referenceId: item._id }),
+      Journal.find({ referenceType: "LedgerPayment", referenceId: { $in: paymentIds } }),
+      CashBankTransaction.find({ referenceType: "LedgerPayment", referenceId: { $in: paymentIds } }),
+    ]);
+    await AuditLog.deleteMany({
+      $or: [
+        { entityType: "WashEntry", entityId: item._id },
+        { entityType: "LedgerPayment", entityId: { $in: paymentIds } },
+        { entityType: "Journal", entityId: { $in: [...washJournals, ...paymentJournals].map((record) => record._id) } },
+        { entityType: "CashBankTransaction", entityId: { $in: [...washTransactions, ...paymentTransactions].map((record) => record._id) } },
+      ],
+    });
+
+    for (const { payment, remainingAmount, remainingAllocations } of paymentUpdates) {
+      if (remainingAmount <= 0) {
+        await Journal.deleteMany({
+          referenceType: "LedgerPayment",
+          referenceId: payment._id,
+        });
+        await CashBankTransaction.deleteMany({
+          referenceType: "LedgerPayment",
+          referenceId: payment._id,
+        });
+        await payment.deleteOne();
+      } else {
+        const linkedJournals = paymentJournals.filter(
+          (journal) => String(journal.referenceId) === String(payment._id),
+        );
+        for (const journal of linkedJournals) {
+          const debitTotal = journal.lines.reduce((sum, line) => sum + line.debit, 0);
+          const creditTotal = journal.lines.reduce((sum, line) => sum + line.credit, 0);
+          journal.lines = journal.lines.map((line) => ({
+            accountId: line.accountId,
+            debit: debitTotal > 0
+              ? Number((line.debit / debitTotal * remainingAmount).toFixed(2))
+              : 0,
+            credit: creditTotal > 0
+              ? Number((line.credit / creditTotal * remainingAmount).toFixed(2))
+              : 0,
+            description: line.description,
+          }));
+          await journal.save();
+        }
+        await CashBankTransaction.updateMany(
+          { referenceType: "LedgerPayment", referenceId: payment._id },
+          { $set: { amount: remainingAmount } },
+        );
+        payment.amount = remainingAmount;
+        payment.allocations = remainingAllocations;
+        await payment.save();
+      }
+    }
+
+    await Journal.deleteMany({ referenceType: "WashEntry", referenceId: item._id });
+    await CashBankTransaction.deleteMany({ referenceType: "WashEntry", referenceId: item._id });
+    await WashEntry.deleteOne({ _id: item._id });
+
+    return res.status(204).end();
+  } catch (error) {
+    return next(error);
+  }
 }

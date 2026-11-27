@@ -8,9 +8,16 @@ import { WashType } from "../models/wash-type.model.js";
 import { Employee } from "../models/employee.model.js";
 import { Expense } from "../models/expense.model.js";
 import { BankAccount } from "../models/bank-account.model.js";
+import { WashEntry } from "../models/wash-entry.model.js";
+import { SalaryTransaction } from "../models/salary.model.js";
 import { Settings } from "../models/settings.model.js";
 import { AuditLog } from "../models/audit-log.model.js";
-import { createWashEntry, listWashEntries, updateWashStatus } from "../controllers/wash.controller.js";
+import {
+  createWashEntry,
+  deleteWashEntry,
+  listWashEntries,
+  updateWashStatus,
+} from "../controllers/wash.controller.js";
 import { getDashboard } from "../controllers/dashboard.controller.js";
 import {
   createCustomerPayment,
@@ -40,22 +47,73 @@ import { LedgerPayment } from "../models/ledger-payment.model.js";
 const router = Router();
 router.use(requireDatabase, requireAuth);
 
-function addCrud(path, Model, moduleName, searchFields) {
-  const c = createCrudController(Model, searchFields);
+function addCrud(path, Model, moduleName, searchFields, references = []) {
+  const c = createCrudController(Model, searchFields, references);
   router.get(path, requirePermission(moduleName, "read"), c.list);
   router.get(`${path}/:id`, requirePermission(moduleName, "read"), c.get);
   router.post(path, requirePermission(moduleName, "create"), c.create);
   router.put(`${path}/:id`, requirePermission(moduleName, "update"), c.update);
-  router.delete(`${path}/:id`, requirePermission(moduleName, "deactivate"), c.remove);
+  router.delete(`${path}/:id`, requirePermission(moduleName, "delete"), c.remove);
 }
 
 router.get("/dashboard", requirePermission("dashboard", "read"), getDashboard);
-addCrud("/customers", Customer, "customers", ["name","ownerName","contactPerson","mobileNumber","gstNumber"]);
-addCrud("/vehicles", Vehicle, "vehicles", ["vehicleNumber","driverName","driverMobileNumber"]);
-addCrud("/wash-types", WashType, "washTypesRates", ["name","description"]);
-addCrud("/employees", Employee, "employees", ["name","mobileNumber","address"]);
-addCrud("/expenses", Expense, "expenses", ["category","description"]);
-addCrud("/bank-accounts", BankAccount, "cashBank", ["bankName","accountName","accountNumber"]);
+addCrud(
+  "/customers",
+  Customer,
+  "customers",
+  ["name", "ownerName", "contactPerson", "mobileNumber", "gstNumber"],
+  [
+    { model: Vehicle, field: "customerId", label: "vehicles" },
+    { model: WashType, field: "rates.customerId", label: "wash-type rates" },
+    { model: WashEntry, field: "customerId", label: "wash entries" },
+    { model: LedgerPayment, field: "customerId", label: "ledger payments" },
+  ],
+);
+addCrud(
+  "/vehicles",
+  Vehicle,
+  "vehicles",
+  ["vehicleNumber", "driverName", "driverMobileNumber"],
+  [{ model: WashEntry, field: "vehicleId", label: "wash entries" }],
+);
+addCrud(
+  "/wash-types",
+  WashType,
+  "washTypesRates",
+  ["name", "description"],
+  [{ model: WashEntry, field: "washTypeId", label: "wash entries" }],
+);
+addCrud(
+  "/employees",
+  Employee,
+  "employees",
+  ["name", "mobileNumber", "address"],
+  [
+    { model: WashEntry, field: "employeeIds", label: "wash entries" },
+    { model: SalaryTransaction, field: "employeeId", label: "salary transactions" },
+  ],
+);
+addCrud(
+  "/expenses",
+  Expense,
+  "expenses",
+  ["category", "description"],
+  [{ model: Expense, field: "reversalOf", label: "expense reversals" }],
+);
+addCrud(
+  "/bank-accounts",
+  BankAccount,
+  "cashBank",
+  ["bankName", "accountName", "accountNumber"],
+  [
+    { model: CashBankTransaction, field: "fromAccountId", label: "transfers from this account" },
+    { model: CashBankTransaction, field: "toAccountId", label: "transfers to this account" },
+    { model: LedgerPayment, field: "bankAccountId", label: "ledger payments" },
+    { model: SalaryTransaction, field: "bankAccountId", label: "salary transactions" },
+    { model: WashEntry, field: "bankAccountId", label: "wash entries" },
+    { model: Expense, field: "accountId", label: "expenses" },
+  ],
+);
 router.get("/settings", requirePermission("auditLogs","read"), async (req,res,next)=>{
   try{const items=await Settings.find().sort({key:1}).lean();res.json({items});}catch(error){next(error);}
 });
@@ -84,6 +142,7 @@ router.get("/wash-entries/:id", requirePermission("receipts","read"), async (req
   }catch(error){next(error);}
 });
 router.patch("/wash-entries/:id/status", requirePermission("washStatuses","update"), updateWashStatus);
+router.delete("/wash-entries/:id", requirePermission("washEntries","delete"), deleteWashEntry);
 
 router.get("/ledger/payments", requirePermission("customerLedger","read"), listCustomerPayments);
 router.post("/ledger/payments", requirePermission("customerLedger","create"), createCustomerPayment);
