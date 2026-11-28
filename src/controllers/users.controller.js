@@ -228,3 +228,100 @@ export async function deleteUser(req, res, next) {
     return next(error);
   }
 }
+
+export async function updateUserPassword(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { password } = req.body ?? {};
+    if (!mongoose.isValidObjectId(id)) {
+      throw httpError(400, "User ID is invalid.");
+    }
+    if (!validatePassword(password)) {
+      throw httpError(400, "Password must be at least 6 characters.");
+    }
+
+    const user = await User.findById(id).select("+passwordHash");
+    if (!user) {
+      throw httpError(404, "User not found.");
+    }
+
+    user.passwordHash = await hashPassword(password);
+    user.mustChangePassword = false;
+    if (user.status === "invited" || user.status === "disabled") {
+      user.status = "active";
+    }
+    await user.save();
+    await AuthSession.deleteMany({ userId: user._id });
+    await AuditLog.create({
+      userId: req.auth?._id,
+      action: "update_password",
+      entityType: "User",
+      entityId: user._id,
+      changes: { action: "password_reset_by_admin" },
+      ipAddress: req.ip,
+    });
+
+    return res.json({ message: "Password updated successfully.", user: publicUser(user) });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+export async function updateUserDetails(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { displayName, role, password } = req.body ?? {};
+    if (!mongoose.isValidObjectId(id)) {
+      throw httpError(400, "User ID is invalid.");
+    }
+
+    const user = await User.findById(id).select("+passwordHash");
+    if (!user) {
+      throw httpError(404, "User not found.");
+    }
+
+    const changes = {};
+    if (typeof displayName === "string" && displayName.trim().length >= 2) {
+      changes.displayName = { before: user.displayName, after: displayName.trim() };
+      user.displayName = displayName.trim();
+    }
+
+    if (typeof role === "string") {
+      if (role !== "owner_admin" && !(await RolePermission.exists({ role }))) {
+        throw httpError(400, "The selected role does not exist.");
+      }
+      if (String(user._id) === String(req.auth?._id) && role !== "owner_admin") {
+        throw httpError(400, "You cannot remove your own Owner/Admin access.");
+      }
+      changes.role = { before: user.role, after: role };
+      user.role = role;
+    }
+
+    if (password && typeof password === "string" && password.trim()) {
+      if (!validatePassword(password)) {
+        throw httpError(400, "Password must be at least 6 characters.");
+      }
+      user.passwordHash = await hashPassword(password);
+      user.mustChangePassword = false;
+      changes.passwordChanged = true;
+      if (user.status === "invited" || user.status === "disabled") {
+        user.status = "active";
+      }
+      await AuthSession.deleteMany({ userId: user._id });
+    }
+
+    await user.save();
+    await AuditLog.create({
+      userId: req.auth?._id,
+      action: "update",
+      entityType: "User",
+      entityId: user._id,
+      changes,
+      ipAddress: req.ip,
+    });
+
+    return res.json({ user: publicUser(user), message: "User updated successfully." });
+  } catch (error) {
+    return next(error);
+  }
+}

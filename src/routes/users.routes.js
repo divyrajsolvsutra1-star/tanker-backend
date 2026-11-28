@@ -4,6 +4,8 @@ import {
   deleteUser,
   inviteUser,
   listUsers,
+  updateUserDetails,
+  updateUserPassword,
   updateUserRole,
 } from "../controllers/users.controller.js";
 import {
@@ -17,7 +19,9 @@ const usersRouter = Router();
 usersRouter.use(requireDatabase, requireAuth, requireOwnerAdmin);
 usersRouter.get("/", listUsers);
 usersRouter.post("/invitations", inviteUser);
+usersRouter.put("/:id", updateUserDetails);
 usersRouter.put("/:id/role", updateUserRole);
+usersRouter.put("/:id/password", updateUserPassword);
 usersRouter.post("/:id/activate", activateUser);
 usersRouter.delete("/:id", deleteUser);
 

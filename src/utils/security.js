@@ -7,7 +7,7 @@ import {
 import { promisify } from "node:util";
 
 const scrypt = promisify(callbackScrypt);
-const PASSWORD_MIN_LENGTH = 12;
+const PASSWORD_MIN_LENGTH = 6;
 const PASSWORD_MAX_LENGTH = 128;
 
 export function validatePassword(password) {
