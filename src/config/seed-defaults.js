@@ -1,5 +1,6 @@
 import { Account } from "../models/accounting.model.js";
 import { WashType } from "../models/wash-type.model.js";
+import { ExpenseCategory, DEFAULT_EXPENSE_CATEGORIES } from "../models/expense-category.model.js";
 
 export async function ensureDefaultAccounts() {
   const seeds = [
@@ -38,10 +39,24 @@ export async function ensureDefaultWashTypes() {
   }
 }
 
+export async function ensureDefaultExpenseCategories() {
+  for (const name of DEFAULT_EXPENSE_CATEGORIES) {
+    const existing = await ExpenseCategory.findOne({ name });
+    if (!existing) {
+      await ExpenseCategory.create({
+        name,
+        description: `${name} operating expense`,
+        status: "active",
+      });
+    }
+  }
+}
+
 export async function initializeDefaults() {
   try {
     await ensureDefaultAccounts();
     await ensureDefaultWashTypes();
+    await ensureDefaultExpenseCategories();
   } catch (err) {
     console.error("Warning: Could not initialize defaults:", err.message);
   }

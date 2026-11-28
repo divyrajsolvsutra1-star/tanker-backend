@@ -12,5 +12,6 @@ export function errorHandler(error, _req, res, _next) {
 
   res.status(statusCode).json({
     error: statusCode === 500 ? "Internal server error" : error.message,
+    field: error?.field || undefined,
   });
 }
