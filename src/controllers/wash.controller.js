@@ -7,7 +7,23 @@ import { LedgerPayment } from "../models/ledger-payment.model.js";
 import { AuditLog } from "../models/audit-log.model.js";
 import { Account, Journal } from "../models/accounting.model.js";
 import { CashBankTransaction } from "../models/cash-bank-transaction.model.js";
+import { Employee } from "../models/employee.model.js";
 import { ensureDefaultAccounts } from "../config/seed-defaults.js";
+import { nextSequentialCode } from "../utils/sequence.js";
+import { hasPermission } from "../middleware/auth.js";
+import { getCustomerOutstanding } from "../utils/customer-outstanding.js";
+
+const CREDIT_PERIOD_DAYS_BY_TERM = { immediate: 0, "15_days": 15, "30_days": 30, other: 0 };
+
+function resolveDueDate(entryDate, customer) {
+  const days = Number(customer.creditPeriod) > 0
+    ? Number(customer.creditPeriod)
+    : (CREDIT_PERIOD_DAYS_BY_TERM[customer.paymentTerms] ?? 0);
+  if (!days) return null;
+  const due = new Date(entryDate);
+  due.setDate(due.getDate() + days);
+  return due;
+}
 
 function httpError(status, message) { return Object.assign(new Error(message), { status }); }
 
@@ -38,10 +54,9 @@ export function planPaymentAdjustmentAfterWashEntryDelete(payment, washEntryId) 
 }
 
 async function nextEntryNumber() {
-  const count = await WashEntry.countDocuments();
   const date = new Date();
-  const prefix = `${date.getFullYear()}${String(date.getMonth()+1).padStart(2,"0")}${String(date.getDate()).padStart(2,"0")}`;
-  return `TW-${prefix}-${String(count + 1).padStart(5,"0")}`;
+  const datePrefix = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, "0")}${String(date.getDate()).padStart(2, "0")}`;
+  return nextSequentialCode(WashEntry, "entryNumber", `TW-${datePrefix}`, 5);
 }
 
 export async function listWashEntries(req, res, next) {
@@ -87,21 +102,51 @@ export async function createWashEntry(req, res, next) {
     if (!vehicle) throw httpError(404, "Vehicle not found.");
     if (!washType || !washType.active) throw httpError(404, "Active wash type not found.");
     if (String(vehicle.customerId) !== String(customer._id)) throw httpError(400, "Vehicle does not belong to this customer.");
-    const rate = washType.rates?.find((rate) => String(rate.customerId) === String(customer._id));
-    const savedRate = body.savedRate !== undefined ? Number(body.savedRate) : Number(rate?.amount ?? 0);
+
+    if (Array.isArray(body.employeeIds) && body.employeeIds.length) {
+      const employeeCount = await Employee.countDocuments({ _id: { $in: body.employeeIds }, status: "active" });
+      if (employeeCount !== new Set(body.employeeIds.map(String)).size) {
+        throw httpError(400, "One or more assigned employees are invalid or inactive.");
+      }
+    }
+
+    const companyRate = washType.rates?.find((rate) => String(rate.customerId) === String(customer._id));
+    const fetchedRate = Number(companyRate?.amount ?? washType.baseRate ?? 0);
+    const savedRate = body.savedRate !== undefined ? Number(body.savedRate) : fetchedRate;
     if (!Number.isFinite(savedRate) || savedRate < 0) throw httpError(400, "A valid wash rate is required.");
+
+    const isOverride = Math.abs(savedRate - fetchedRate) > 0.001;
+    if (isOverride) {
+      if (!(await hasPermission(req.auth, "washEntries", "approve"))) {
+        throw httpError(403, "Only a Manager or Owner/Admin may override the configured wash rate.");
+      }
+      if (!body.rateModificationReason || !String(body.rateModificationReason).trim()) {
+        throw httpError(400, "A reason is required when overriding the configured wash rate.");
+      }
+    }
+
     const paymentType = body.paymentType || "credit";
     let creditApprovalStatus = "not_required";
     if (paymentType === "credit") {
-      const outstanding = customer.openingBalance || 0;
-      if (outstanding + savedRate > customer.creditLimit && customer.creditLimit >= 0) creditApprovalStatus = "pending";
+      const outstanding = await getCustomerOutstanding(customer._id, customer.openingBalance);
+      const hasLimit = Number(customer.creditLimit) > 0;
+      if (hasLimit && outstanding + savedRate > customer.creditLimit) creditApprovalStatus = "pending";
     }
-    if (paymentType === "credit" && creditApprovalStatus === "pending" && body.creditApproved !== true) {
-      throw httpError(403, "Credit limit approval is required from a Manager or Owner/Admin.");
+    if (paymentType === "credit" && creditApprovalStatus === "pending") {
+      if (body.creditApproved !== true) {
+        throw httpError(403, "Credit limit approval is required from a Manager or Owner/Admin.");
+      }
+      if (!(await hasPermission(req.auth, "washEntries", "approve"))) {
+        throw httpError(403, "You are not authorized to approve credit limit overrides.");
+      }
     }
     if (paymentType === "immediate" && !["cash","upi","bank"].includes(body.paymentMethod)) throw httpError(400, "Immediate payment requires a payment method.");
+    if (paymentType === "immediate" && ["bank","upi"].includes(body.paymentMethod) && !body.bankAccountId) {
+      throw httpError(400, "A bank account is required for bank or UPI payments.");
+    }
 
     const entryNumber = await nextEntryNumber();
+    const entryDate = body.entryDate ? new Date(body.entryDate) : new Date();
     const item = await WashEntry.create({
       entryNumber,
       customerId: customer._id,
@@ -111,16 +156,17 @@ export async function createWashEntry(req, res, next) {
       driverName: body.driverName ?? vehicle.driverName,
       driverMobileNumber: body.driverMobileNumber ?? vehicle.driverMobileNumber,
       savedRate,
-      rateModified: body.rateModified === true,
-      rateModificationHistory: body.rateModified ? [{ amount: savedRate, modifiedBy: req.auth?._id, reason: body.rateModificationReason || "Authorized modification" }] : [],
+      rateModified: isOverride,
+      rateModificationHistory: isOverride ? [{ amount: savedRate, modifiedBy: req.auth?._id, reason: body.rateModificationReason }] : [],
       paymentType,
       paymentMethod: paymentType === "immediate" ? body.paymentMethod : undefined,
       bankAccountId: body.bankAccountId,
+      dueDate: paymentType === "credit" ? resolveDueDate(entryDate, customer) : null,
       creditApprovalStatus,
       creditApprovedBy: body.creditApproved ? req.auth?._id : undefined,
       status: "booked",
       statusHistory: [{ status:"booked", changedBy:req.auth?._id, changedAt:new Date(), note:"Entry created" }],
-      entryDate: body.entryDate ? new Date(body.entryDate) : new Date(),
+      entryDate,
       createdBy: req.auth?._id
     });
 
@@ -134,9 +180,14 @@ export async function createWashEntry(req, res, next) {
       Account.findOne({code:"4001"})
     ]);
     if (!debitAccount || !creditAccount) throw httpError(500,"Required accounting accounts are unavailable.");
-    const voucherCount = await Journal.countDocuments();
+    const voucherNumber = await nextSequentialCode(
+      Journal,
+      "voucherNumber",
+      `JV-${new Date().getFullYear()}`,
+      6,
+    );
     await Journal.create({
-      voucherNumber:`JV-${new Date().getFullYear()}-${String(voucherCount+1).padStart(6,"0")}`,
+      voucherNumber,
       voucherType:"journal",
       date:item.entryDate,
       lines:[
@@ -168,13 +219,57 @@ export async function createWashEntry(req, res, next) {
 
 export async function updateWashStatus(req, res, next) {
   try {
-    const allowed = ["booked","washing","completed","delivered"];
+    const allowed = ["booked","washing","completed","delivered","cancelled"];
     const status = req.body?.status;
     if (!allowed.includes(status)) throw httpError(400, "Invalid wash status.");
     const item = await WashEntry.findById(req.params.id);
     if (!item) throw httpError(404, "Wash entry not found.");
     if (item.status === "cancelled") {
       throw httpError(409, "Cancelled wash entries cannot be updated.");
+    }
+    if (item.status === "delivered" && status !== "cancelled") {
+      throw httpError(409, "Delivered wash entries cannot change status further.");
+    }
+    if (status === "cancelled") {
+      const allocated = await LedgerPayment.aggregate([
+        { $match: { "allocations.washEntryId": item._id } },
+        { $unwind: "$allocations" },
+        { $match: { "allocations.washEntryId": item._id } },
+        { $group: { _id: null, total: { $sum: "$allocations.amount" } } },
+      ]);
+      if ((allocated[0]?.total || 0) > 0) {
+        throw httpError(409, "Cannot cancel a wash entry that already has payments allocated to it. Reverse the payment allocation first.");
+      }
+      const journals = await Journal.find({ referenceType: "WashEntry", referenceId: item._id });
+      for (const journal of journals) {
+        await Journal.create({
+          voucherNumber: await nextSequentialCode(Journal, "voucherNumber", `JV-${new Date().getFullYear()}`, 6),
+          voucherType: "journal",
+          date: new Date(),
+          lines: journal.lines.map((line) => ({ accountId: line.accountId, debit: line.credit, credit: line.debit, description: `Reversal: ${line.description}` })),
+          narration: `Cancellation reversal for ${item.entryNumber}`,
+          referenceType: "WashEntry",
+          referenceId: item._id,
+          status: "posted",
+          createdBy: req.auth?._id,
+        });
+      }
+      const transactions = await CashBankTransaction.find({ referenceType: "WashEntry", referenceId: item._id });
+      const reverseType = { cash_in: "cash_out", bank_in: "bank_out", upi_in: "bank_out" };
+      for (const tx of transactions) {
+        await CashBankTransaction.create({
+          type: reverseType[tx.type] || "cash_out",
+          amount: tx.amount,
+          transactionDate: new Date(),
+          description: `Cancellation reversal for ${item.entryNumber}`,
+          fromAccountId: tx.toAccountId,
+          toAccountId: tx.fromAccountId,
+          referenceType: "WashEntry",
+          referenceId: item._id,
+          reversalOf: tx._id,
+          createdBy: req.auth?._id,
+        });
+      }
     }
     item.status = status;
     item.statusHistory.push({ status, changedBy:req.auth?._id, changedAt:new Date(), note:req.body?.note });

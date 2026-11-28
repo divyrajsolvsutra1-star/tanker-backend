@@ -65,8 +65,59 @@ export async function getDashboard(_req, res, next) {
     }));
     const cashTx = await CashBankTransaction.aggregate([
       { $match:{ transactionDate:{ $lte:end } } },
-      { $group:{ _id:null,in:{ $sum:{ $cond:[{ $in:["$type",["cash_in","bank_to_cash","upi_in"]] },"$amount",0] } },out:{ $sum:{ $cond:[{ $in:["$type",["cash_out","cash_to_bank"]] },"$amount",0] } } } }
+      { $group:{ _id:null,in:{ $sum:{ $cond:[{ $in:["$type",["cash_in","bank_to_cash"]] },"$amount",0] } },out:{ $sum:{ $cond:[{ $in:["$type",["cash_out","cash_to_bank"]] },"$amount",0] } } } }
     ]);
+
+    const creditCustomerIds = customers.filter((c) => Number(c.creditLimit) > 0).map((c) => c._id);
+    const [creditEntryTotals, paymentTotals, overdueEntries] = await Promise.all([
+      WashEntry.aggregate([
+        { $match: { customerId: { $in: customers.map((c) => c._id) }, paymentType: "credit", status: { $ne: "cancelled" } } },
+        { $group: { _id: "$customerId", total: { $sum: "$savedRate" } } },
+      ]),
+      LedgerPayment.aggregate([
+        { $match: { customerId: { $in: customers.map((c) => c._id) } } },
+        { $group: { _id: "$customerId", total: { $sum: "$amount" } } },
+      ]),
+      WashEntry.find({
+        paymentType: "credit",
+        status: { $ne: "cancelled" },
+        dueDate: { $lt: end },
+      }).populate("customerId", "name").lean(),
+    ]);
+    const overdueEntryIds = overdueEntries.map((e) => e._id);
+    const overdueAllocations = await LedgerPayment.aggregate([
+      { $match: { "allocations.washEntryId": { $in: overdueEntryIds } } },
+      { $unwind: "$allocations" },
+      { $match: { "allocations.washEntryId": { $in: overdueEntryIds } } },
+      { $group: { _id: "$allocations.washEntryId", total: { $sum: "$allocations.amount" } } },
+    ]);
+    const allocatedByEntry = Object.fromEntries(overdueAllocations.map((r) => [String(r._id), r.total]));
+    const unpaidOverdueEntries = overdueEntries.filter(
+      (entry) => entry.savedRate - (allocatedByEntry[String(entry._id)] || 0) > 0.001,
+    );
+    const creditByCustomer = Object.fromEntries(creditEntryTotals.map((r) => [String(r._id), r.total]));
+    const paidByCustomer = Object.fromEntries(paymentTotals.map((r) => [String(r._id), r.total]));
+    const alerts = [];
+    for (const customer of customers) {
+      if (!creditCustomerIds.some((id) => String(id) === String(customer._id))) continue;
+      const outstanding = Number(customer.openingBalance || 0) + (creditByCustomer[String(customer._id)] || 0) - (paidByCustomer[String(customer._id)] || 0);
+      if (outstanding > Number(customer.creditLimit)) {
+        alerts.push({ type: "credit_exceeded", customerId: customer._id, customerName: customer.name, message: `${customer.name} has exceeded its credit limit (₹${outstanding.toLocaleString("en-IN")} / ₹${Number(customer.creditLimit).toLocaleString("en-IN")}).` });
+      } else if (outstanding >= Number(customer.creditLimit) * 0.8) {
+        alerts.push({ type: "credit_approaching", customerId: customer._id, customerName: customer.name, message: `${customer.name} is approaching its credit limit (₹${outstanding.toLocaleString("en-IN")} / ₹${Number(customer.creditLimit).toLocaleString("en-IN")}).` });
+      }
+    }
+    const overdueByCustomer = new Map();
+    for (const entry of unpaidOverdueEntries) {
+      const key = String(entry.customerId?._id || entry.customerId);
+      const existing = overdueByCustomer.get(key) || { customerName: entry.customerId?.name || "Customer", count: 0, amount: 0 };
+      existing.count += 1;
+      existing.amount += entry.savedRate - (allocatedByEntry[String(entry._id)] || 0);
+      overdueByCustomer.set(key, existing);
+    }
+    for (const [customerId, info] of overdueByCustomer.entries()) {
+      alerts.push({ type: "overdue", customerId, customerName: info.customerName, message: `${info.customerName} has ${info.count} overdue wash ${info.count === 1 ? "entry" : "entries"} totalling ₹${info.amount.toLocaleString("en-IN")}.` });
+    }
     res.json({
       todayWashEntries:todayEntries,
       todayVehicles:todayVehicles.length,
@@ -77,7 +128,8 @@ export async function getDashboard(_req, res, next) {
       totalCustomerOutstanding,
       cashBalance:(cashTx[0]?.in||0)-(cashTx[0]?.out||0),
       bankBalances,
-      monthlyExpenses:expenses[0]?.total||0
+      monthlyExpenses:expenses[0]?.total||0,
+      alerts
     });
   } catch (error) { next(error); }
 }

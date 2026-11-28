@@ -86,19 +86,21 @@ export function requireOwnerAdmin(req, res, next) {
   return next();
 }
 
+export async function hasPermission(auth, moduleName, action) {
+  if (auth?.role === "owner_admin") return true;
+  const policy = await RolePermission.findOne({ role: auth?.role }).lean();
+  const permissions = policy?.permissions;
+  const actions =
+    permissions instanceof Map
+      ? permissions.get(moduleName) ?? []
+      : permissions?.[moduleName] ?? [];
+  return actions.includes(action);
+}
+
 export function requirePermission(moduleName, action) {
   return async function permissionMiddleware(req, res, next) {
-    if (req.auth?.role === "owner_admin") return next();
-
     try {
-      const policy = await RolePermission.findOne({ role: req.auth?.role }).lean();
-      const permissions = policy?.permissions;
-      const actions =
-        permissions instanceof Map
-          ? permissions.get(moduleName) ?? []
-          : permissions?.[moduleName] ?? [];
-      if (actions.includes(action)) return next();
-
+      if (await hasPermission(req.auth, moduleName, action)) return next();
       return res.status(403).json({ error: "Permission denied." });
     } catch (error) {
       return next(error);

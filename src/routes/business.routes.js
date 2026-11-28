@@ -25,8 +25,17 @@ import {
   getCustomerLedger,
   getSalaryRegister,
   createSalaryTransaction,
-  listAccounting
+  listAccounting,
+  listCashBankTransactions,
+  createCashBankTransfer,
 } from "../controllers/finance.controller.js";
+import {
+  listExpenses,
+  getExpense,
+  createExpense,
+  updateExpense,
+  removeExpense,
+} from "../controllers/expense.controller.js";
 import {
   getTrialBalance,
   getProfitAndLoss,
@@ -93,13 +102,11 @@ addCrud(
     { model: SalaryTransaction, field: "employeeId", label: "salary transactions" },
   ],
 );
-addCrud(
-  "/expenses",
-  Expense,
-  "expenses",
-  ["category", "description"],
-  [{ model: Expense, field: "reversalOf", label: "expense reversals" }],
-);
+router.get("/expenses", requirePermission("expenses","read"), listExpenses);
+router.get("/expenses/:id", requirePermission("expenses","read"), getExpense);
+router.post("/expenses", requirePermission("expenses","create"), createExpense);
+router.put("/expenses/:id", requirePermission("expenses","update"), updateExpense);
+router.delete("/expenses/:id", requirePermission("expenses","delete"), removeExpense);
 addCrud(
   "/bank-accounts",
   BankAccount,
@@ -153,24 +160,8 @@ router.post("/salary/transactions", requirePermission("employees","create"), cre
 
 router.get("/accounting", requirePermission("accounting","read"), listAccounting);
 
-router.get("/cash-bank/transactions", requirePermission("cashBank","read"), async (req,res,next)=>{
-  try {
-    const filter={};
-    if(req.query.type) filter.type=req.query.type;
-    if(req.query.from||req.query.to){filter.transactionDate={};if(req.query.from)filter.transactionDate.$gte=new Date(req.query.from);if(req.query.to)filter.transactionDate.$lte=new Date(req.query.to);}
-    const items=await CashBankTransaction.find(filter).populate("fromAccountId toAccountId").sort({transactionDate:-1}).lean();
-    res.json({items});
-  } catch(error){next(error);}
-});
-
-router.post("/cash-bank/transactions", requirePermission("cashBank","create"), async (req,res,next)=>{
-  try{
-    const body=req.body||{};
-    if(!Number(body.amount)||Number(body.amount)<=0||!body.type) throw Object.assign(new Error("Valid transaction type and amount are required."),{status:400});
-    const item=await CashBankTransaction.create({...body,createdBy:req.auth?._id});
-    res.status(201).json({item});
-  }catch(error){next(error);}
-});
+router.get("/cash-bank/transactions", requirePermission("cashBank","read"), listCashBankTransactions);
+router.post("/cash-bank/transactions", requirePermission("cashBank","create"), createCashBankTransfer);
 
 router.get("/reports/wash", requirePermission("reports","read"), async (req,res,next)=>{
   try{

@@ -356,7 +356,7 @@ export async function getSalaryReport(req, res, next) {
         monthlySalary: employee.monthlySalary,
         advances,
         paid,
-        remaining: Math.max(0, employee.monthlySalary - paid)
+        remaining: Math.max(0, employee.monthlySalary - advances - paid)
       };
     });
 
